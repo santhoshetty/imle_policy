@@ -35,7 +35,8 @@ def evaluate(args, nets, stats, method='rs_imle'):
     max_rewards = list()
     success_list = list()
 
-    device = torch.device(args['device'])
+    # device = torch.device(args['device'])  # original: always requested CUDA; crashed the periodic eval when CUDA wasn't available
+    device = torch.device(args['device'] if torch.cuda.is_available() else 'cpu')
 
     if method == 'diffusion':
         noise_scheduler = DDPMScheduler(
@@ -178,14 +179,16 @@ def evaluate(args, nets, stats, method='rs_imle'):
                 obs, reward, done, _, info = env.step(action[i])
                 obs_deque.append(obs)
                 rewards.append(reward)
-                # env.render(mode="human")
+                # env.render(mode="human")  # original: always off; now gated by --render_eval
+                if args.get('render_eval', False):
+                    env.render(mode="human")
                 # update progress bar
                 step_idx += 1
                 if step_idx > args['max_steps']:
                     done = True
                 if done:
                     break
-                        
+
 
         if max(rewards) > 0.95:
             success_list.append(1)
@@ -195,6 +198,9 @@ def evaluate(args, nets, stats, method='rs_imle'):
         max_rewards.append(max(rewards))
         # print("Current Average max reward:", np.mean(max_rewards))
         # print("Current Success Rate:", np.mean(success_list))
+
+    if args.get('render_eval', False):
+        env.close()
 
     print("Average max reward:", np.mean(max_rewards))
     print("Success Rate:", np.mean(success_list))

@@ -16,6 +16,7 @@
     "num_epochs": 500,
     "timestep_integer_scaler": 100,
     "num_cameras": 1,
-    "batch_size": 128,
+    "batch_size": 64,
+    "batch_size_original": 128,
     "num_flow_iters": 1
 }

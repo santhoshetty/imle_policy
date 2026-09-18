@@ -209,7 +209,10 @@ class GeneratorConditionalUnet1D(nn.Module):
     def __init__(self,
         input_dim,
         global_cond_dim,
-        down_dims=[256,512,1024],
+        # down_dims=[256,512,1024],  # original (75M params) — static footprint (params+grads+AdamW state)
+        # alone is ~1.2-1.5GB, which OOMs on <4GB GPUs (e.g. laptop MX450, 2GB) regardless of batch size.
+        # See CHANGES.md for the profiling that found this. Override via --down_dims CLI arg if needed.
+        down_dims=[64,128,256],
         kernel_size=5,
         n_groups=8
         ):
