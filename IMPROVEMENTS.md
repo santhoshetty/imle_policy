@@ -54,10 +54,40 @@ diversity), we'd expect this change to make little difference, in which case mod
 (reverting toward a larger `down_dims`, at whatever batch-size/VRAM trade-off that requires) is
 the next thing to try instead.
 
-**What actually happened**: _(not yet run — filled in after training with
-`--use_batch_global_rejection` completes far enough to compare against the epoch-289
-baseline (48% success, 0.776 mean reward) and the pre-change checkpoint saved at epoch 313:
-`saved_weights/comfy-pine-1_..._pusht/{net,ema_net}_weights_baseline_pre_prism_epoch313.pth`)._
+**What actually happened (v1 — killed, regressed)**: ran as `pusht_prism_batch_global`
+(wandb run `fk21wwb0`). Result was the opposite of expected: loss converged *slower* than the
+baseline, and the gap widened monotonically rather than closing — +22% worse at step 4000,
++53% worse at step 8000 (mean loss in 200-step bins). `min_distance` (best candidate found per
+target) was also consistently *worse* than the baseline from step ~400 onward, which shouldn't
+be possible given the new loss searches a strict superset of candidates (B·K=1280 pooled vs.
+K=20 own-only) — a superset search can never do worse than a subset search on the same network
+unless the search/selection mechanism itself is broken. No other red flags (no NaN/inf,
+`zero_loss` not spiking, per-step wall-clock ~0.94s vs. baseline's ~0.91s — not a speed
+regression). Killed at epoch 20/500 (step ~8000) rather than let it keep burning GPU time on a
+clearly-diverging trend.
+
+**Root cause (found by re-reading the paper's algorithm box, not just its prose summary)**: v1
+only rejected a candidate *for the target it already covers* — a per-(target, candidate) pair
+check (`distances[i,k] > epsilon`). It pooled the candidates but implemented none of the
+bookkeeping that makes pooling safe: nothing stopped a second, third, ... target from also
+trying to pull that same already-claimed candidate toward itself, so gradient updates for
+"popular" candidates fought between multiple targets simultaneously. PRISM's actual rejection
+mask is per-CANDIDATE and computed GLOBALLY: candidate k is unavailable to *every* target the
+moment ANY target in the batch is within epsilon of it (`reject k iff min_j D(j,k) < epsilon`),
+with a fallback to the unrestricted set if that filtering would leave a target with zero
+candidates. v1 implemented the pooling but omitted exactly the piece the paper calls out as
+what prevents this contention.
+
+**v2 fix applied**: `rs_imle_loss_batch_global` corrected to do the global per-candidate
+rejection (`candidate_claimed_by_someone = distances.min(dim=0).values < epsilon`, applied to
+every target's row) with the paper's empty-pool fallback. Unit-checked on synthetic data before
+rerunning: v2's `min_distance` is now properly *better* than the per-sample loss's (as it should
+be, searching a superset), unlike v1 which regressed on that exact metric. Relaunched as
+`pusht_prism_batch_global_v2` (wandb run `tli5zovm`,
+https://wandb.ai/santhoshetty-norican-digital/pusht_prism_batch_global_v2) —
+results to be filled in once it's run far enough to compare against the epoch-289 baseline (48%
+success, 0.776 mean reward) and the pre-change checkpoint saved at epoch 313:
+`saved_weights/comfy-pine-1_..._pusht/{net,ema_net}_weights_baseline_pre_prism_epoch313.pth`.
 
 **What we didn't implement, and why**: PRISM's Performer/linear-attention generator and
 multisensory fusion encoder target real-time (30-50Hz) multi-task control with multiple sensor

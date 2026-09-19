@@ -60,6 +60,27 @@ def rs_imle_loss_batch_global(real_samples, fake_samples, epsilon=0.03):
     not full images or activations -- a (B, B*n_samples_per_condition) cdist is cheap next to
     the network forward/backward pass that produced the candidates.
 
+    v2 CORRECTION (see IMPROVEMENTS.md, "batch-global rejection v1 regression")
+    -----------------------------------------------------------------------------
+    The first version of this function only rejected a candidate *for the target it already
+    covers* (a per-(target, candidate) pair check, `distances[i, k] > epsilon`) -- it pooled
+    the candidates but never stopped a second, third, ... target from ALSO trying to pull that
+    same candidate toward itself. A live run showed this made things worse than the original
+    per-sample loss (min_distance regressed despite searching a strict superset of candidates),
+    which only makes sense if multiple targets fighting over one candidate was diluting its
+    gradient.
+
+    PRISM's actual rejection mask (re-checked against the paper) is per-CANDIDATE and computed
+    GLOBALLY across every target, not per-pair: candidate k is unavailable to *every* target,
+    not just the one it already covers, the moment ANY target in the batch is within epsilon of
+    it (paper: reject k iff min_j D(j,k) < epsilon). That is what actually prevents the
+    many-targets-one-candidate contention -- once a candidate is "claimed" by covering some
+    target, it drops out of consideration for everyone else too, rather than staying available
+    for every other unsatisfied target to also pull on. The paper also specifies a fallback: if
+    this global filtering would leave a target with zero available candidates (everything left
+    in the pool is already claimed by someone else), that target reverts to its unrestricted
+    per-pair-far-enough set rather than being left with nothing to pull toward.
+
     Usage: opt-in via train.py's --use_batch_global_rejection flag; the original
     `rs_imle_loss` is left untouched above so the two can be compared directly (see
     IMPROVEMENTS.md for the recorded before/after).
@@ -74,11 +95,27 @@ def rs_imle_loss_batch_global(real_samples, fake_samples, epsilon=0.03):
     # batch, not just the ones generated for that target's own conditioning context.
     distances = torch.cdist(real_flat, fake_flat)
 
-    # Same rejection rule as rs_imle_loss: a candidate already within epsilon of a target is
-    # "good enough" and excluded (set to distances.max() so it can't win the min()) -- the loss
-    # should only pull the closest candidate that ISN'T already a good match, not fight over
-    # ones that already are.
-    valid_samples = (distances > epsilon).float()
+    # Per-pair check (same rule as rs_imle_loss): candidate k is "good enough" *for target i*
+    # once it's within epsilon of i specifically. This alone is what the first (buggy) version
+    # used as its only filter.
+    per_pair_far_enough = distances > epsilon                                    # (B, B*K)
+
+    # The missing piece: a candidate is "claimed" -- and should drop out for EVERY target, not
+    # just the one it covers -- the moment it's within epsilon of *any* target in the batch.
+    # Without this, target j can still drag a candidate that already covers target i toward
+    # itself too, and the resulting gradient update fights between i and j instead of letting
+    # i's coverage stand and j look elsewhere.
+    candidate_claimed_by_someone = distances.min(dim=0).values < epsilon         # (B*K,)
+    globally_available = per_pair_far_enough & (~candidate_claimed_by_someone).unsqueeze(0)
+
+    # Paper's fallback: if global filtering leaves a target with no available candidates at all
+    # (everything remaining in the pool already covers someone else), fall back to that target's
+    # raw per-pair-far-enough set rather than giving it nothing to pull toward.
+    row_has_available_candidate = globally_available.any(dim=1)
+    valid_samples = torch.where(
+        row_has_available_candidate.unsqueeze(1), globally_available, per_pair_far_enough
+    ).float()
+
     min_distances, _ = (distances + (1 - valid_samples) * distances.max()).min(dim=1)
     # A target only contributes to the loss if it actually found a not-yet-covered candidate to
     # pull closer (min_distances < distances.max() means the min() above hit a real, non-masked
