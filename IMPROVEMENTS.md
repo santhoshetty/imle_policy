@@ -82,12 +82,46 @@ what prevents this contention.
 rejection (`candidate_claimed_by_someone = distances.min(dim=0).values < epsilon`, applied to
 every target's row) with the paper's empty-pool fallback. Unit-checked on synthetic data before
 rerunning: v2's `min_distance` is now properly *better* than the per-sample loss's (as it should
-be, searching a superset), unlike v1 which regressed on that exact metric. Relaunched as
+be, searching a superset), unlike v1 which regressed on that exact metric.
+
+**What actually happened (v2 — killed, same failure shape as v1, just delayed)**: ran as
 `pusht_prism_batch_global_v2` (wandb run `tli5zovm`,
-https://wandb.ai/santhoshetty-norican-digital/pusht_prism_batch_global_v2) —
-results to be filled in once it's run far enough to compare against the epoch-289 baseline (48%
-success, 0.776 mean reward) and the pre-change checkpoint saved at epoch 313:
-`saved_weights/comfy-pine-1_..._pusht/{net,ema_net}_weights_baseline_pre_prism_epoch313.pth`.
+https://wandb.ai/santhoshetty-norican-digital/pusht_prism_batch_global_v2). Started with a
+genuine early advantage over the baseline (loss -29% better at step 500, -19% at step 1000) —
+something v1 never showed — but the baseline caught up by step ~2000 and pulled steadily ahead
+from there: +15% worse at step 3000, +38% at step 4000, +52% at step 8000, **+56% at step
+8800**. That final number is essentially identical to v1's own +53% at the same step count
+(8000) — meaning the rejection-scope fix changed the shape of the failure (a real early win
+before it flips) but not the eventual outcome. Killed at epoch 22/500 (step ~9100).
+
+### VERDICT
+
+**Batch-global rejection, in either implementation, does not help on this task and should not
+be pursued further without first implementing PRISM's adaptive epsilon (or understanding why it
+matters here) — see the deeper investigation below for why.** Two runs, two independent
+implementations of the mechanism (one admittedly buggy, one verified correct against the
+paper's algorithm box), both converged slower than the unmodified `rs_imle_loss` by a similar
+final margin (~53-56% worse loss by step ~8000-8800). The corrected version's early advantage
+(steps 500-1500) shows the *idea* has some validity — batch-pooling clearly helps early when
+few candidates are "claimed" yet — but something about running it against this task/pool-size
+combination for longer actively hurts rather than plateaus-and-holds. That's a stronger, more
+specific failure than "didn't help"; it's actively worse than doing nothing, at least in its
+current form.
+
+Dispatched a deeper investigation (see below once filled in) into two live hypotheses:
+(a) PushT's action space may be too narrow/low-dimensional a manifold for batch-pooling to make
+semantic sense — pooling helps when a batch's targets are genuinely diverse (PRISM's own
+multi-task benchmarks), and may actively hurt when most targets are drawn from one task's
+smooth, narrow action manifold and end up spuriously "satisfying" each other; (b) a fixed
+`epsilon=0.03` may be miscalibrated for a candidate pool 64x larger (B·K=1280 vs K=20) — order-
+statistics alone predicts the expected nearest-neighbor distance shrinks as the pool grows,
+independent of whether the network learned anything, which could be starving `valid_real_samples`
+of genuine gradient signal. PRISM's own paper pairs batch-global rejection with an EMA-adaptive
+epsilon rather than a fixed one — we did not implement that piece, so hypothesis (b) would mean
+our fixed-epsilon version was structurally never going to work regardless of the rejection-scope
+fix, independent of hypothesis (a).
+
+**_(deeper investigation results — filled in once the dispatched subagent returns)_**
 
 **What we didn't implement, and why**: PRISM's Performer/linear-attention generator and
 multisensory fusion encoder target real-time (30-50Hz) multi-task control with multiple sensor
