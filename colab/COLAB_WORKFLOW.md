@@ -23,6 +23,28 @@ comparable -- not a separate training pipeline, just a different place to run th
 6. Run cell 6's symlink cell, then the training cell. **This is the parameterized part**: edit the `--down_dims`/`--batch_size`/`--use_batch_global_rejection`/etc. flags to run whatever experiment you want next — it's the same CLI as local `train.py`, so anything documented in `IMPROVEMENTS.md`/`CHANGES.md` for local runs applies here too. The notebook's default runs the **original full-size architecture** (`down_dims=256,512,1024`, `batch_size=128`) that doesn't fit on the local GPU — that's the point of running it here.
 7. If the runtime disconnects (free-tier Colab caps sessions, and this repo's own runs have taken 30+ hours locally — expect the same or longer here depending on GPU tier and idle limits): reopen the notebook, re-run cells 1-4 and the symlink cell in cell 6, then resume with `--resume_from saved_weights/<run_name>/latest_checkpoint.pth` — same resume mechanism as local, because it's the same code path. Consider Colab Pro/Pro+ if disconnects are frequent; free-tier idle/session limits are the main practical constraint on a run this long, not the GPU itself.
 
+### Gotcha: resuming after "Interrupt execution" (not a full runtime restart) can fail with `run ID ... is in use`
+
+Interrupting a cell (Runtime → Interrupt execution) kills the foreground `python train.py`
+process but leaves wandb's background `wandb-core` service daemon running in the same Colab VM,
+still holding the interrupted run as "active". The next `train.py --resume_from ...` reuses that
+lingering service (you'll see `wandb: Using an existing wandb-core service via WANDB_SERVICE` in
+the log) and collides with the run ID it's trying to reattach to:
+`wandb.sdk.mailbox.mailbox_handle.ServerResponseError: run ID <id> is in use`.
+
+Fix: in a cell, before retrying the resume command:
+```python
+!pkill -9 -f wandb-core || true
+import os
+os.environ.pop("WANDB_SERVICE", None)
+```
+This forces a fresh wandb service instead of reattaching to the dead one. If it still fails
+(rare — would mean wandb's server hasn't yet timed out the old run's heartbeat), wait 1-2
+minutes and retry, or as a last resort fully restart the runtime (Runtime → Restart session,
+not just Interrupt) and re-run the setup cells — a full restart kills every background process,
+not just wandb's, guaranteeing a clean slate. A plain Colab disconnect/reconnect (step 7 above)
+doesn't hit this, since the whole VM and its background processes go away together.
+
 ## Bringing a trained checkpoint back to the local machine
 
 Nothing to export specially — the symlink in step 6 means Drive already has every checkpoint
