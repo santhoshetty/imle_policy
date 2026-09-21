@@ -11,6 +11,50 @@ the top. An entry with an unfilled "What actually happened" is still running or 
 
 ---
 
+## 2026-09-22 — Model capacity increase (down_dims [64,128,256] → [128,256,512])
+
+**What it is**: reverts partway toward the original (pre-GPU-fix) policy network width. Current
+default is `down_dims=[64,128,256]` (7.5M params in the policy net, chosen in `CHANGES.md` to
+fit the MX450's 2GB VRAM). This run uses `--down_dims 128,256,512` (22.6M params in the policy
+net, ~33.8M incl. the ResNet18 vision encoder) — 3x the policy-net parameters, still well short
+of the original 75M-param `[256,512,1024]` (which doesn't fit at any batch size on this GPU, per
+`CHANGES.md`). `n_samples_per_condition` is left at 20 (unchanged from the baseline) so this is
+a capacity-only experiment, not conflated with a sample-count or loss-function change like the
+batch-global rejection attempts above.
+
+**Why we're trying it**: this is the other lever the original plateau diagnosis called out
+(alongside the abandoned batch-global rejection loss) — the baseline's loss/success-rate
+plateau could be a genuine model-capacity ceiling from the reduced 7.5M-param network, separate
+from the candidate-diversity mechanism the batch-global loss targeted (and which turned out to
+have its own, unrelated failure mode — see above).
+
+**GPU constraint, respected explicitly this time**: the MX450 has ~1.76GB usable VRAM. Profiled
+before committing to a run (`capacity_sweep.py`, `stability_check.py` in scratch):
+`down_dims=[128,256,512]` OOMs at `batch_size` 64 or 48 (the original batch size) with
+`n_samples_per_condition=20`, but fits at `batch_size=32` — peak VRAM measured at **1.245GB**,
+confirmed **stable across 60 steps** (no growth/fragmentation creep, settled by step 10). Chose
+this over the tighter-fitting `down_dims=[96,192,384]@batch=64` (1.60GB peak, only ~160MB
+headroom out of 1.76GB) specifically for safety margin on an unattended multi-day run, at the
+cost of a smaller capacity bump than `[96,192,384]` would have given at the original batch size.
+Trade-off: `batch_size=32` means ~2x the steps/epoch (802 vs. 401) at similar per-step cost, so
+this run takes roughly ~1.85x longer in wall-clock terms per epoch than the baseline — epoch
+counts remain directly comparable (same full pass over the dataset either way), wall-clock
+comparisons need to account for the ~1.85x factor.
+
+**What we expect**: if the plateau is genuinely a capacity ceiling, loss should keep decreasing
+past where the baseline flattened (loss ~0.043-0.045, starting around epoch ~270) instead of
+plateauing at a similar point, and eval success rate should climb past the baseline's ~45-50%
+ceiling. If capacity wasn't the real bottleneck, this run should plateau at a similar loss/
+success-rate to the baseline despite the larger network, pointing at something else (data
+quantity, IMLE epsilon calibration, task difficulty ceiling on PushT itself) as the actual limit.
+
+**What actually happened**: _(running — `pusht_capacity_128_256_512`, wandb run `f7dy9roz`,
+https://wandb.ai/santhoshetty-norican-digital/pusht_capacity_128_256_512 — to be filled in once
+there's enough data to compare against the baseline's epoch-289 checkpoint, 48% success /
+0.776 mean reward, and its loss trajectory from `pusht_vanilla_imle`/`l0usi514`)._
+
+---
+
 ## 2026-09-19 — Batch-global rejection rs-IMLE loss (PRISM-inspired)
 
 **What it is**: an alternative to the existing `rs_imle_loss` (in
