@@ -48,10 +48,23 @@ ceiling. If capacity wasn't the real bottleneck, this run should plateau at a si
 success-rate to the baseline despite the larger network, pointing at something else (data
 quantity, IMLE epsilon calibration, task difficulty ceiling on PushT itself) as the actual limit.
 
-**What actually happened**: _(running — `pusht_capacity_128_256_512`, wandb run `f7dy9roz`,
-https://wandb.ai/santhoshetty-norican-digital/pusht_capacity_128_256_512 — to be filled in once
-there's enough data to compare against the baseline's epoch-289 checkpoint, 48% success /
-0.776 mean reward, and its loss trajectory from `pusht_vanilla_imle`/`l0usi514`)._
+**What actually happened so far**: ran locally from epoch 0 to epoch 16 (~3.2h). Loss started
+behind the baseline at matched step counts (expected — larger networks take longer to get their
+extra parameters moving usefully) and was closing the gap, briefly reaching rough parity/a
+slight edge around step ~2000-2300 (baseline 0.41, this run 0.38) before being paused — too
+early to call a trend, just noting the shape wasn't the same failure pattern the batch-global
+loss showed.
+
+**Paused (not concluded) in favor of Colab**: once `colab/pusht_colab_train.ipynb` (see
+`CHANGES.md`) was confirmed running cleanly on an A100-80GB, this local run was stopped
+(epoch 16, ~15 minutes of unsaved progress lost to the lightweight-checkpoint interval — see
+`CHANGES.md`) to free the local GPU, since Colab is now running the *original* full-size
+architecture (`down_dims=[256,512,1024]`, the real capacity ceiling, not just a 3x step toward
+it) dramatically faster on real hardware. That Colab run (`pusht_colab_original_capacity`) is
+now the primary capacity-vs-plateau experiment; this local one may be resumed later from
+`saved_weights/pusht_capacity_128_256_512.../latest_checkpoint.pth` if a mid-sized capacity
+data point (22.6M params) ends up being independently useful once the Colab result is in, but
+isn't the priority right now.
 
 ---
 
