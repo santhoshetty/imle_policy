@@ -108,18 +108,54 @@ combination for longer actively hurts rather than plateaus-and-holds. That's a s
 specific failure than "didn't help"; it's actively worse than doing nothing, at least in its
 current form.
 
-Dispatched a deeper investigation (see below once filled in) into two live hypotheses:
-(a) PushT's action space may be too narrow/low-dimensional a manifold for batch-pooling to make
-semantic sense — pooling helps when a batch's targets are genuinely diverse (PRISM's own
-multi-task benchmarks), and may actively hurt when most targets are drawn from one task's
-smooth, narrow action manifold and end up spuriously "satisfying" each other; (b) a fixed
-`epsilon=0.03` may be miscalibrated for a candidate pool 64x larger (B·K=1280 vs K=20) — order-
-statistics alone predicts the expected nearest-neighbor distance shrinks as the pool grows,
-independent of whether the network learned anything, which could be starving `valid_real_samples`
-of genuine gradient signal. PRISM's own paper pairs batch-global rejection with an EMA-adaptive
-epsilon rather than a fixed one — we did not implement that piece, so hypothesis (b) would mean
-our fixed-epsilon version was structurally never going to work regardless of the rejection-scope
-fix, independent of hypothesis (a).
+### ROOT CAUSE (confirmed by direct instrumentation, not inferred)
+
+Dispatched a deeper investigation into two hypotheses: (a) PushT's action space is too
+narrow/low-dimensional for batch-pooling to make semantic sense (candidates from different
+contexts spuriously "satisfy" each other because real targets are already close together);
+(b) a fixed `epsilon=0.03` is miscalibrated for a candidate pool 64x larger (B·K=1280 vs K=20)
+— order statistics alone predict the expected nearest-neighbor distance shrinks as the pool
+grows, independent of whether the network learned anything.
+
+**(a) refuted**: real target trajectories from different episodes are well-separated — minimum
+pairwise distance 0.195 vs. `epsilon`=0.03, 0% of real-real pairs fall within epsilon. The
+action manifold isn't the problem.
+
+**(b) real but secondary**: a pure-random-noise check confirms pool size alone shrinks the
+expected nearest-neighbor distance by ~21% (pool 20→1280) independent of learning. Measured on
+the trained epoch-313 checkpoint: 37% of candidates get globally claimed, 69% of targets already
+"satisfied". Epsilon calibration does shift with pool size — but not enough on its own to
+explain a *monotonically widening* divergence.
+
+**The actual mechanism — decisively confirmed**: ran the real loss code against a batch from
+`datasets/pusht.pkl` through a **freshly-initialized (untrained) network**, the exact regime
+where the killed runs' divergence begins. Result: **98.4% of targets' pooled-nearest-neighbor
+candidate comes from a DIFFERENT conditioning context, not their own.** With an untrained net,
+all 1280 pooled candidates are roughly equally "close" to any target regardless of context, so
+whichever one wins the argmin is ~63/64 likely to belong to someone else's conditioning input.
+The loss then does exactly what it's designed to do — pulls that winning candidate toward
+target *i* — except that candidate was generated conditioned on an unrelated observation. This
+actively teaches the network cross-context confusion (many different observations pulled toward
+converging outputs) at exactly the moment it should be learning each observation's specific
+action, and that damage compounds rather than washing out with more training.
+
+Confirmed this is init-phase-specific by running the same instrumentation against the real
+epoch-313 **trained** checkpoint: at convergence, `own-20-only` nearest-neighbor distance and
+`pooled-1280` nearest-neighbor distance are numerically identical (0.0270 vs 0.0270) — once the
+network is well-trained, pooling finds zero better matches than a target's own candidates. So
+batch-global pooling only ever matters during the early undifferentiated phase — precisely the
+phase where it's actively harmful, not the later phase where it might help. This also explains
+the failure *shape* in both runs: the early loss "advantage" was a pool-size loss-magnitude
+artifact, not genuine learning, and the crossover at step ~1500-2000 is roughly when per-context
+candidates specialize enough to stop losing to cross-context noise.
+
+**Recommendation**: adaptive epsilon is not the next fix — it addresses the secondary factor
+(b), not the primary mechanism. The real fix, if this is worth a third attempt, is a
+**curriculum**: don't enable batch-global pooling until the network has had several thousand
+steps of plain per-context `rs_imle_loss` training first, so its own-context candidates are
+already differentiated enough that cross-context matches stop winning by chance. That's
+untested speculation, not a third guaranteed win — deprioritized in favor of the model-capacity
+lever (see the next entry) unless a curriculum variant is specifically wanted later.
 
 **_(deeper investigation results — filled in once the dispatched subagent returns)_**
 
