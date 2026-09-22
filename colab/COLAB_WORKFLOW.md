@@ -4,6 +4,35 @@ Goal: run experiments on Colab's larger-VRAM GPU (T4: 15GB, A100: 40GB) *in para
 local MX450 (2GB) runs, using the exact same `train.py` code, so results are directly
 comparable -- not a separate training pipeline, just a different place to run the same one.
 
+## Notebooks
+
+- `pusht_colab_train.ipynb` -- PushT, the task all local benchmarking/experiments have used.
+- `lift_colab_train.ipynb` -- the Lift task (single-arm pick-and-lift, robosuite-based), used
+  to check whether PushT's ~50-58% success-rate ceiling is task-specific or a broader property
+  of this method. Same workflow shape, but: different dependencies (`robosuite`/`mujoco`
+  instead of `pymunk`/`pygame`), and a different dataset-acquisition step (see below) since
+  Lift has no standalone dataset zip the way PushT does. No per-epoch timing has been measured
+  for this task on any GPU yet -- the notebook runs a short calibration before committing to
+  the full 500 epochs, rather than guessing.
+- To add another task (`PickPlaceCan`, `ToolHang`, `TwoArmTransport`, `NutAssemblySquare`,
+  `kitchen`, `ur3_blockpush`): copy `lift_colab_train.ipynb` and change the task name, the
+  dataset filename search pattern in the dataset cell, and the dependency list in the install
+  cell (`kitchen`/`ur3_blockpush` additionally need `d4rl`/`dm_control`, per `pyproject.toml`
+  -- not yet set up in any notebook here).
+
+## Dataset availability (checked via the HuggingFace API, not assumed)
+
+The project's dataset repo (`krishanrana/imle_policy` on HuggingFace) has exactly two files:
+`pusht_dataset/datasets.zip` (PushT only, small) and `datasets.zip` (**25.8GB, every task
+bundled together** -- confirmed via `huggingface.co/api/datasets/krishanrana/imle_policy`,
+there is no per-task zip for anything other than PushT). For any non-PushT task, the dataset
+cell downloads the full 25.8GB zip to the Colab VM's *local* disk (not Drive -- avoids eating a
+free Google account's Drive quota on a temporary file), extracts only the matching task's
+`.pkl` via `zipfile` (without fully unpacking the other tasks), saves that one file to Drive,
+then deletes the local zip. This is a one-time cost per task (~10-25 min depending on Colab's
+network that session) -- once a task's `.pkl` is on Drive, every future session reuses it
+exactly like `pusht.pkl` already does.
+
 ## What to upload / where things live
 
 | Thing | Where it lives | Why |
